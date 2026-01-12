@@ -665,11 +665,13 @@ def _extract_from_zip(
                 caption_state,
                 config.docling.on_vlm_error == "skip_document",
             )
+            figure_prefix = _figure_prefix(item, config)
             md_text, image_index = rewrite_markdown_images_with_placeholders(
                 md_text,
                 image_links,
                 caption_map,
                 include_caption_line=True,
+                figure_prefix=figure_prefix,
             )
             meta["caption_stats"] = caption_stats
         elif md_text:
@@ -1039,6 +1041,14 @@ def _hash_bytes(data: bytes, algo: str) -> str:
     hasher = hashlib.new(algo)
     hasher.update(data)
     return hasher.hexdigest()
+
+
+def _figure_prefix(item: dict[str, Any], config: AppConfig) -> str:
+    rel_path = str(item.get("source_rel_path") or "")
+    if not rel_path:
+        return "FIG"
+    digest = _hash_bytes(rel_path.encode("utf-8"), config.manifest.hash_algo)
+    return f"FIG-{digest[:12]}"
 
 
 def _init_captioner(config: AppConfig) -> CaptionClient | None:
