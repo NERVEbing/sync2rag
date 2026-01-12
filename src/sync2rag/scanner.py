@@ -609,7 +609,7 @@ def _extract_docling_output(
         if isinstance(result.json_content, str):
             json_text = result.json_content
         elif result.json_content is not None:
-            json_text = json.dumps(result.json_content, ensure_ascii=True, indent=2)
+            json_text = json.dumps(result.json_content, ensure_ascii=False, indent=2)
 
     if json_text is not None:
         json_path = config.output.docling_json_dir / Path(
@@ -860,13 +860,72 @@ def _caption_from_refs(refs: list[Any], text_lookup: dict[str, str]) -> str | No
     return None
 
 
+_LEADING_FILLERS_LOWER = (
+    "ok",
+    "okay",
+    "sure",
+    "certainly",
+    "of course",
+    "here is",
+    "here's",
+    "below is",
+    "the following is",
+)
+
+_LEADING_FILLERS = (
+    "好的",
+    "好的呢",
+    "当然",
+    "当然可以",
+    "可以",
+    "没问题",
+    "没有问题",
+    "以下是",
+    "下面是",
+)
+
+_LEADING_STRIP_CHARS = " \t\r\n-–—:：,，。"
+
+
+def _strip_leading_fillers(text: str) -> str:
+    cleaned = text.strip()
+    for _ in range(4):
+        lowered = cleaned.lower()
+        matched = False
+        for filler in _LEADING_FILLERS_LOWER:
+            if lowered.startswith(filler):
+                cleaned = cleaned[len(filler):].lstrip(_LEADING_STRIP_CHARS)
+                matched = True
+                break
+        if matched:
+            continue
+        for filler in _LEADING_FILLERS:
+            if cleaned.startswith(filler):
+                cleaned = cleaned[len(filler):].lstrip(_LEADING_STRIP_CHARS)
+                matched = True
+                break
+        if not matched:
+            break
+    return cleaned
+
+
 def _normalize_caption_text(text: str) -> str:
-    return " ".join(text.split())
+    cleaned = " ".join(text.split())
+    cleaned = _strip_leading_fillers(cleaned)
+    return cleaned.strip(_LEADING_STRIP_CHARS)
 
 
 def _is_bad_caption(text: str) -> bool:
     lowered = text.lower()
-    if not lowered or lowered in {"image", "figure", "picture"}:
+    normalized = lowered.strip(_LEADING_STRIP_CHARS)
+    if not normalized or normalized in {
+        "image",
+        "figure",
+        "picture",
+        "图片",
+        "图像",
+        "照片",
+    }:
         return True
     bad_markers = [
         "please provide the image",
@@ -878,6 +937,19 @@ def _is_bad_caption(text: str) -> bool:
         "unable to",
         "no image",
         "cannot see the image",
+        "抱歉",
+        "对不起",
+        "作为ai",
+        "作为人工智能",
+        "无法识别",
+        "无法判断",
+        "无法看到图片",
+        "无法查看图片",
+        "无法访问图片",
+        "无法打开图片",
+        "图片不存在",
+        "请提供图片",
+        "请上传图片",
     ]
     return any(marker in lowered for marker in bad_markers)
 

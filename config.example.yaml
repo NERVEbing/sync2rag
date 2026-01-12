@@ -73,7 +73,7 @@ captioning:
   # Max concurrent captioning requests.
   concurrency: 2
   # Prompt used for image captions.
-  prompt: "Describe this image in a few sentences."
+  prompt: "Respond in Chinese. Describe the image in 1-2 concise sentences. Do not add any polite preface or conversational filler. Avoid acknowledgements like OK/Sure. No lists or Markdown. Only output the description."
 
 output:
   # Root output directory for generated files.
