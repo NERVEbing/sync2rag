@@ -50,6 +50,24 @@ uv run sync2rag clear --all -c config.yaml
 - `data/`：markdown、docling JSON/ZIP、抽取的图片
 - `.state/`：本地扫描与同步缓存
 
+## Docker
+从 GHCR 拉取（tag 或 latest）：
+```bash
+docker pull ghcr.io/nervebing/sync2rag:<tag>
+docker pull ghcr.io/nervebing/sync2rag:latest
+```
+
+结合本地配置与数据运行：
+```bash
+docker run --rm \
+  -v /path/to/input:/input \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/manifests:/app/manifests \
+  -v $(pwd)/.state:/app/.state \
+  ghcr.io/nervebing/sync2rag:latest scan -c /app/config.yaml
+```
+
 ## 测试
 ```bash
 uv run pytest

@@ -52,6 +52,24 @@ uv run sync2rag clear --all -c config.yaml
 - `data/`: markdown, docling JSON/ZIP, extracted images
 - `.state/`: local scan and sync caches
 
+## Docker
+Pull from GHCR (tag or latest):
+```bash
+docker pull ghcr.io/nervebing/sync2rag:<tag>
+docker pull ghcr.io/nervebing/sync2rag:latest
+```
+
+Run with local config and data:
+```bash
+docker run --rm \
+  -v /path/to/input:/input \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/manifests:/app/manifests \
+  -v $(pwd)/.state:/app/.state \
+  ghcr.io/nervebing/sync2rag:latest scan -c /app/config.yaml
+```
+
 ## Testing
 ```bash
 uv run pytest
