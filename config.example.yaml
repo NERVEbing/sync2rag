@@ -1,0 +1,155 @@
+input:
+  # Root directory to scan for input documents.
+  root_dir: /path/to/root
+  # Extensions to convert via docling.
+  include_ext: [".pdf", ".docx", ".pptx"]
+  # Extensions to pass through without conversion.
+  passthrough_ext: []
+  # Glob patterns to ignore while scanning.
+  exclude_globs: ["~$*", ".DS_Store", "**/._*"]
+  # Whether to follow symlinks during scan.
+  follow_symlinks: false
+  # Skip files larger than this size (MB).
+  max_file_size_mb: 500
+
+docling:
+  # Docling service base URL.
+  base_url: http://DOCLING_HOST:5001
+  # Docling endpoint name (e.g., file).
+  endpoint: file
+  # Use async processing when supported.
+  use_async: true
+  # Poll interval for async jobs.
+  async_poll_interval_sec: 5
+  # Max wait time for async jobs; set <=0 to disable.
+  async_timeout_sec: 3600
+  # HTTP timeout for docling requests.
+  timeout_sec: 600
+  options:
+    # Allowed input formats.
+    from_formats: ["pdf", "docx", "pptx"]
+    # Output formats to request.
+    to_formats: ["md", "json"]
+    # Output packaging type (zip, etc.).
+    target_type: zip
+    # Image export mode for docling.
+    image_export_mode: referenced
+    # Whether to include images in output.
+    include_images: true
+    # Image scale factor for exports.
+    images_scale: 2.0
+    # Enable OCR.
+    do_ocr: true
+    # Force OCR even when text is detected.
+    force_ocr: false
+    # OCR engine identifier.
+    ocr_engine: rapidocr
+    # OCR language list.
+    ocr_lang: ["ch_sim", "en", "fr", "de"]
+    # PDF backend used by docling.
+    pdf_backend: pypdfium2
+    # Docling pipeline name.
+    pipeline: standard
+    # Per-document processing timeout.
+    document_timeout: 3600
+  # Action when VLM/captioning fails (skip_document, stop, etc.).
+  on_vlm_error: skip_document
+  # Action when docling fails (skip_document, stop, etc.).
+  on_docling_error: skip_document
+
+captioning:
+  # VLM chat completion endpoint for image captions.
+  url: http://CAPTIONING_HOST:4000/v1/chat/completions
+  headers:
+    # API auth header for captioning service.
+    Authorization: "Bearer YOUR_LLM_API_KEY"
+  params:
+    # Model name to use for captioning.
+    model: qwen-vl-plus
+    # Max tokens for the caption response.
+    max_completion_tokens: 200
+  # Per-request timeout in seconds.
+  timeout: 20
+  # Max concurrent captioning requests.
+  concurrency: 2
+  # Prompt used for image captions.
+  prompt: "Describe this image in a few sentences."
+
+output:
+  # Root output directory for generated files.
+  root_dir: data
+  # Markdown output directory.
+  markdown_dir: data/markdown
+  # Docling JSON output directory.
+  docling_json_dir: data/docling/json
+  # Docling ZIP output directory.
+  docling_zip_dir: data/docling/zip
+  # Extracted images output directory.
+  images_dir: data/docling/images
+  # Keep docling ZIP files on disk.
+  keep_zip: true
+  # Public base URL for serving images/markdown.
+  public_base_url: http://PUBLIC_HOST:8000/
+  # Optional prefix to prepend to public URLs.
+  public_path_prefix: ""
+  # Rewrite image links in docling markdown.
+  rewrite_docling_image_links: true
+  # Rewrite links in passthrough markdown files.
+  rewrite_passthrough_md: false
+  # Enable image deduplication.
+  image_dedupe: false
+  # Directory for deduplicated images.
+  image_dedupe_dir: data/docling/images/_dedup
+
+manifest:
+  # Full manifest path for all files.
+  full_path: manifests/manifest.json
+  # RAG manifest path for LightRAG sync.
+  rag_path: manifests/manifest.rag.json
+  # Include image index entries in manifest.
+  include_image_index: true
+  # Hash algorithm for file fingerprints.
+  hash_algo: sha256
+  dedupe:
+    # First dedupe key.
+    stage1: source_sha256
+    # Second dedupe key.
+    stage2: md_sha256
+    # Canonical file selection strategy.
+    canonical_strategy: shortest_path
+
+lightrag:
+  # LightRAG base URL.
+  base_url: http://LIGHTRAG_HOST:9621
+  # LightRAG API key.
+  api_key: "YOUR_LIGHTRAG_API_KEY"
+  # Batch size for upload calls.
+  batch_size: 20
+  # Page size for list APIs.
+  list_page_size: 200
+  # Prefix for file source identifiers.
+  file_source_prefix: "sync2rag"
+  # Delete missing files from LightRAG.
+  delete_missing: true
+  # Update files when content changes.
+  update_on_change: true
+  # Wait for inflight ingestion jobs.
+  wait_inflight: false
+  # Poll interval for inflight jobs.
+  inflight_poll_sec: 5
+  # Delete LLM cache when removing.
+  delete_llm_cache: false
+  # Delete file blobs on removal.
+  delete_file: false
+
+runtime:
+  # Run without side effects.
+  dry_run: false
+  # Logging level (INFO, DEBUG, etc.).
+  log_level: INFO
+  # Max worker threads for processing.
+  max_workers: 4
+  # Local state directory.
+  state_dir: .state
+  # Fail if OCR languages are missing.
+  fail_on_missing_ocr_lang: true
