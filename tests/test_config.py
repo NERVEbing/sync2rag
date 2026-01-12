@@ -43,3 +43,27 @@ def test_load_config_minimal(tmp_path: Path) -> None:
     assert config.input.root_dir == root_dir
     assert config.docling.base_url == "http://localhost:5001"
     assert config.output.root_dir == Path("data")
+
+
+def test_load_config_rejects_nested_output_root(tmp_path: Path) -> None:
+    input_root = tmp_path / "input"
+    output_root = input_root / "out"
+    input_root.mkdir()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        textwrap.dedent(
+            f"""
+            input:
+              root_dir: {input_root.as_posix()}
+              include_ext: [".pdf"]
+            docling:
+              base_url: http://localhost:5001
+            output:
+              root_dir: {output_root.as_posix()}
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError):
+        load_config(config_path)

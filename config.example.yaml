@@ -1,5 +1,5 @@
 input:
-  # Required. Root directory to scan for input documents.
+  # Required. Root directory to scan for input documents (must not contain output.root_dir).
   root_dir: /path/to/root
   # Optional (default: []). Extensions to convert via docling.
   include_ext: [".pdf", ".docx", ".pptx"]
@@ -77,7 +77,7 @@ captioning:
   prompt: "Respond in Chinese. Describe the image in 1-2 concise sentences. Do not add any polite preface or conversational filler. Avoid acknowledgements like OK/Sure. No lists or Markdown. Only output the description."
 
 output:
-  # Optional (default: data). Root output directory for generated files.
+  # Optional (default: data). Root output directory for generated files (must not contain input.root_dir).
   root_dir: data
   # Optional (default: data/markdown). Markdown output directory.
   markdown_dir: data/markdown

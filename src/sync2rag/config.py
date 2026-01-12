@@ -127,6 +127,8 @@ def load_config(path: str | Path) -> AppConfig:
     runtime_cfg = _parse_runtime(raw.get("runtime", {}))
     captioning_cfg = _parse_captioning(raw)
 
+    _validate_paths(input_cfg, output_cfg)
+
     return AppConfig(
         input=input_cfg,
         docling=docling_cfg,
@@ -143,6 +145,28 @@ def require_lightrag_config(config: AppConfig) -> None:
         raise ConfigError("missing required key: lightrag.base_url")
     if not config.lightrag.api_key:
         raise ConfigError("missing required key: lightrag.api_key")
+
+
+def _resolve_path(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def _is_subpath(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_paths(input_cfg: InputConfig, output_cfg: OutputConfig) -> None:
+    input_root = _resolve_path(input_cfg.root_dir)
+    output_root = _resolve_path(output_cfg.root_dir)
+    if _is_subpath(output_root, input_root) or _is_subpath(input_root, output_root):
+        raise ConfigError(
+            "input.root_dir and output.root_dir must not be nested; "
+            "choose separate directories to avoid scanning generated outputs"
+        )
 
 
 def _parse_input(raw: dict[str, Any]) -> InputConfig:
