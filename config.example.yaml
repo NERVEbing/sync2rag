@@ -70,7 +70,7 @@ captioning:
   # Optional (default: 30). Per-request timeout in seconds.
   timeout: 20
   # Optional (default: "Describe this image in a few sentences."). Prompt used for captions.
-  prompt: "Respond in Chinese. Describe the image in 1-2 concise sentences. Do not add any polite preface or conversational filler. Avoid acknowledgements like OK/Sure. No lists or Markdown. Only output the description."
+  prompt: "Describe the image in 1-2 concise sentences. Do not add any polite preface or conversational filler. Avoid acknowledgements like OK/Sure. No lists or Markdown. Only output the description."
 
 output:
   # Optional (default: data). Root output directory for generated files (must not contain input.root_dir).
