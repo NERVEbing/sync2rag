@@ -47,7 +47,6 @@ class DoclingConfig:
     async_timeout_sec: float | None
     timeout_sec: int
     options: DoclingOptions
-    on_vlm_error: str
     on_docling_error: str
 
 
@@ -63,8 +62,6 @@ class OutputConfig:
     public_path_prefix: str
     rewrite_docling_image_links: bool
     rewrite_passthrough_md: bool
-    image_dedupe: bool
-    image_dedupe_dir: Path
 
 
 @dataclass
@@ -95,7 +92,6 @@ class LightRAGConfig:
 class RuntimeConfig:
     dry_run: bool
     log_level: str
-    max_workers: int
     state_dir: Path
     fail_on_missing_ocr_lang: bool
 
@@ -203,7 +199,6 @@ def _parse_docling(raw: dict[str, Any]) -> DoclingConfig:
         if async_timeout_sec <= 0:
             async_timeout_sec = None
     timeout_sec = int(raw.get("timeout_sec", 600))
-    on_vlm_error = raw.get("on_vlm_error", "skip_document")
     on_docling_error = raw.get("on_docling_error", "skip_document")
 
     options_raw = raw.get("options", {})
@@ -235,7 +230,6 @@ def _parse_docling(raw: dict[str, Any]) -> DoclingConfig:
         async_timeout_sec=async_timeout_sec,
         timeout_sec=timeout_sec,
         options=options,
-        on_vlm_error=on_vlm_error,
         on_docling_error=on_docling_error,
     )
 
@@ -246,8 +240,6 @@ def _parse_output(raw: dict[str, Any]) -> OutputConfig:
     docling_json_dir = Path(raw.get("docling_json_dir", root_dir / "docling" / "json"))
     docling_zip_dir = Path(raw.get("docling_zip_dir", root_dir / "docling" / "zip"))
     images_dir = Path(raw.get("images_dir", root_dir / "docling" / "images"))
-    image_dedupe_dir = Path(raw.get("image_dedupe_dir", images_dir / "_dedup"))
-
     return OutputConfig(
         root_dir=root_dir,
         markdown_dir=markdown_dir,
@@ -259,8 +251,6 @@ def _parse_output(raw: dict[str, Any]) -> OutputConfig:
         public_path_prefix=str(raw.get("public_path_prefix", "")),
         rewrite_docling_image_links=bool(raw.get("rewrite_docling_image_links", True)),
         rewrite_passthrough_md=bool(raw.get("rewrite_passthrough_md", False)),
-        image_dedupe=bool(raw.get("image_dedupe", False)),
-        image_dedupe_dir=image_dedupe_dir,
     )
 
 
@@ -297,7 +287,6 @@ def _parse_runtime(raw: dict[str, Any]) -> RuntimeConfig:
     return RuntimeConfig(
         dry_run=bool(raw.get("dry_run", False)),
         log_level=str(raw.get("log_level", "INFO")),
-        max_workers=int(raw.get("max_workers", 4)),
         state_dir=Path(raw.get("state_dir", ".state")),
         fail_on_missing_ocr_lang=bool(raw.get("fail_on_missing_ocr_lang", True)),
     )

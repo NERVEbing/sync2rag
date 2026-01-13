@@ -52,8 +52,6 @@ docling:
     pipeline: standard
     # Optional (default: null). Per-document processing timeout.
     document_timeout: 3600
-  # Optional (default: skip_document). Action when VLM/captioning fails.
-  on_vlm_error: skip_document
   # Optional (default: skip_document). Action when docling fails.
   on_docling_error: skip_document
 
@@ -71,8 +69,6 @@ captioning:
     max_completion_tokens: 200
   # Optional (default: 30). Per-request timeout in seconds.
   timeout: 20
-  # Optional (currently unused). Max concurrent captioning requests.
-  concurrency: 2
   # Optional (default: "Describe this image in a few sentences."). Prompt used for captions.
   prompt: "Respond in Chinese. Describe the image in 1-2 concise sentences. Do not add any polite preface or conversational filler. Avoid acknowledgements like OK/Sure. No lists or Markdown. Only output the description."
 
@@ -97,10 +93,6 @@ output:
   rewrite_docling_image_links: true
   # Optional (default: false). Rewrite links in passthrough markdown files.
   rewrite_passthrough_md: false
-  # Optional (default: false). Enable image deduplication.
-  image_dedupe: false
-  # Optional (default: data/docling/images/_dedup). Directory for deduplicated images.
-  image_dedupe_dir: data/docling/images/_dedup
 
 manifest:
   # Optional (default: manifests/manifest.json). Full manifest path for all files.
@@ -148,8 +140,6 @@ runtime:
   dry_run: false
   # Optional (default: INFO). Logging level.
   log_level: INFO
-  # Optional (default: 4). Max worker threads for processing.
-  max_workers: 4
   # Optional (default: .state). Local state directory.
   state_dir: .state
   # Optional (default: true). Fail if OCR languages are missing.

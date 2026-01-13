@@ -63,6 +63,7 @@ class CaptioningError(RuntimeError):
 
 def scan_and_convert(config: AppConfig) -> ScanResult:
     logger = logging.getLogger(__name__)
+    start_time = time.monotonic()
     ensure_dir(config.output.root_dir)
     ensure_dir(config.runtime.state_dir)
 
@@ -129,14 +130,13 @@ def scan_and_convert(config: AppConfig) -> ScanResult:
         items.append(item)
 
     _reset_stage1(items)
-    _apply_stage1_dedupe(items)
+    _apply_stage1_dedupe(items, config)
     _ensure_canonical_ready(items)
 
     docling_client = DoclingClient(config.docling)
     captioner = _init_captioner(config)
     caption_state_path = config.runtime.state_dir / "vlm_caption_cache.json"
     caption_state = _load_caption_cache(caption_state_path, captioner)
-    image_cache: dict[str, ImageInfo] = {}
     total_to_process = sum(
         1
         for item in items
@@ -152,37 +152,42 @@ def scan_and_convert(config: AppConfig) -> ScanResult:
             processed_idx += 1
             source_path = Path(item["source_abs_path"])
             ext = item["source_ext"]
+            rel_path = item["source_rel_path"]
+            conversion_type = (
+                "passthrough" if ext in config.input.passthrough_ext else "docling"
+            )
             logger.info(
-                "[%d/%d] convert start: %s",
+                "FILE [%d/%d] type=%s file=%s",
                 processed_idx,
                 total_to_process,
-                item["source_rel_path"],
+                conversion_type,
+                rel_path,
             )
+            item_start = time.monotonic()
             if ext in config.input.passthrough_ext:
                 _handle_passthrough(item, source_path, config)
-                logger.info(
-                    "[%d/%d] passthrough done: %s",
-                    processed_idx,
-                    total_to_process,
-                    item["source_rel_path"],
-                )
             else:
                 _handle_docling(
                     item,
                     source_path,
                     config,
                     docling_client,
-                    image_cache,
                     captioner,
                     caption_state,
                 )
-                if item.get("conversion_status") == "success":
-                    logger.info(
-                        "[%d/%d] convert done: %s",
-                        processed_idx,
-                        total_to_process,
-                        item["source_rel_path"],
-                    )
+            elapsed = time.monotonic() - item_start
+            status = item.get("conversion_status") or "unknown"
+            level = logging.INFO if status == "success" else logging.WARNING
+            logger.log(
+                level,
+                "DONE [%d/%d] type=%s status=%s elapsed=%s file=%s",
+                processed_idx,
+                total_to_process,
+                conversion_type,
+                status,
+                _format_duration(elapsed),
+                rel_path,
+            )
     finally:
         docling_client.close()
         if captioner:
@@ -190,7 +195,7 @@ def scan_and_convert(config: AppConfig) -> ScanResult:
         _save_caption_cache(caption_state_path, caption_state, captioner)
 
     _reset_stage2(items)
-    _apply_stage2_dedupe(items)
+    _apply_stage2_dedupe(items, config)
     _assign_rag_metadata(items, config)
 
     manifest = {
@@ -205,7 +210,8 @@ def scan_and_convert(config: AppConfig) -> ScanResult:
     write_manifest(manifest, config.manifest.full_path)
     write_manifest(rag_manifest, config.manifest.rag_path)
     _save_scan_state(state_path, config.input.root_dir, items)
-    _log_scan_summary(logger, items, reused, processed_idx)
+    elapsed_total = time.monotonic() - start_time
+    _log_scan_summary(logger, items, reused, processed_idx, elapsed_total)
     return ScanResult(manifest=manifest, rag_manifest=rag_manifest)
 
 
@@ -359,7 +365,11 @@ def _save_scan_state(path: Path, root_dir: Path, items: list[dict[str, Any]]) ->
 
 
 def _log_scan_summary(
-    logger: logging.Logger, items: list[dict[str, Any]], reused: int, processed: int
+    logger: logging.Logger,
+    items: list[dict[str, Any]],
+    reused: int,
+    processed: int,
+    elapsed_sec: float,
 ) -> None:
     failed = sum(1 for item in items if item.get("conversion_status") == "failure")
     skipped_duplicates = sum(
@@ -371,13 +381,22 @@ def _log_scan_summary(
         1 for item in items if item.get("conversion_status") == "skipped_too_large"
     )
     logger.info(
-        "Scan done: processed=%d, reused=%d, failed=%d, skipped_duplicates=%d, skipped_large=%d",
+        "Scan done: processed=%d, reused=%d, failed=%d, skipped_duplicates=%d, skipped_large=%d, elapsed=%s",
         processed,
         reused,
         failed,
         skipped_duplicates,
         skipped_large,
+        _format_duration(elapsed_sec),
     )
+
+
+def _format_duration(elapsed_sec: float) -> str:
+    total = int(elapsed_sec + 0.5)
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    seconds = total % 60
+    return f"{hours}:{minutes:02d}:{seconds:02d}"
 
 
 def _collect_source_files(config: AppConfig) -> list[Path]:
@@ -409,16 +428,18 @@ def _is_excluded(rel_path: str, patterns: list[str]) -> bool:
     return False
 
 
-def _apply_stage1_dedupe(items: list[dict[str, Any]]) -> None:
+def _apply_stage1_dedupe(items: list[dict[str, Any]], config: AppConfig) -> None:
+    dedupe_key = _dedupe_field(config, "stage1", "source_sha256")
+    canonical_strategy = _canonical_strategy(config)
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in items:
-        sha = item.get("source_sha256")
-        if sha:
-            groups.setdefault(sha, []).append(item)
+        value = item.get(dedupe_key)
+        if value:
+            groups.setdefault(str(value), []).append(item)
 
     for group in groups.values():
         paths = [item["source_rel_path"] for item in group]
-        canonical = choose_canonical(paths)
+        canonical = _choose_canonical(paths, canonical_strategy)
         for item in group:
             item["stage1_canonical_rel_path"] = canonical
             item["stage1_canonical"] = item["source_rel_path"] == canonical
@@ -461,7 +482,6 @@ def _handle_docling(
     source_path: Path,
     config: AppConfig,
     client: DoclingClient,
-    image_cache: dict[str, ImageInfo],
     captioner: CaptionClient | None,
     caption_state: dict[str, Any],
 ) -> None:
@@ -488,7 +508,7 @@ def _handle_docling(
 
     try:
         md_text, json_text, image_index, docling_meta = _extract_docling_output(
-            result, item, config, image_cache, captioner, caption_state
+            result, item, config, captioner, caption_state
         )
     except CaptioningError as exc:
         item["conversion_status"] = "failure"
@@ -554,23 +574,10 @@ def _resolve_docling_failure(result: DoclingResult, config: AppConfig) -> str | 
             errors
         ):
             raise RuntimeError("missing tesseract language packs")
-        if _is_vlm_error(errors):
-            if config.docling.on_vlm_error == "skip_document":
-                return "vlm_error"
-            raise RuntimeError("; ".join(errors))
         if config.docling.on_docling_error == "skip_document":
             return "docling_error"
         raise RuntimeError("; ".join(errors))
     return None
-
-
-def _is_vlm_error(errors: list[str]) -> bool:
-    lowered = " ".join(errors).lower()
-    return (
-        "vlm" in lowered
-        or "picture description" in lowered
-        or "image description" in lowered
-    )
 
 
 def _is_missing_ocr_lang_error(errors: list[str]) -> bool:
@@ -596,7 +603,6 @@ def _extract_docling_output(
     result: DoclingResult,
     item: dict[str, Any],
     config: AppConfig,
-    image_cache: dict[str, ImageInfo],
     captioner: CaptionClient | None,
     caption_state: dict[str, Any],
 ) -> tuple[str | None, str | None, list[dict[str, Any]], dict[str, Any]]:
@@ -607,7 +613,7 @@ def _extract_docling_output(
 
     if result.zip_bytes:
         md_text, json_text, image_index, meta = _extract_from_zip(
-            result.zip_bytes, item, config, image_cache, captioner, caption_state
+            result.zip_bytes, item, config, captioner, caption_state
         )
     else:
         md_text = result.md_content
@@ -630,7 +636,6 @@ def _extract_from_zip(
     zip_bytes: bytes,
     item: dict[str, Any],
     config: AppConfig,
-    image_cache: dict[str, ImageInfo],
     captioner: CaptionClient | None,
     caption_state: dict[str, Any],
 ) -> tuple[str | None, str | None, list[dict[str, Any]], dict[str, Any]]:
@@ -659,16 +664,14 @@ def _extract_from_zip(
         if json_name:
             json_text = _read_zip_text(zf, json_name)
 
-        image_links, image_info = _extract_images(
-            zf, entries, doc_root, config, image_cache
-        )
+        image_links, image_info = _extract_images(zf, entries, doc_root, config)
         if md_text and config.output.rewrite_docling_image_links:
             caption_map, caption_stats = _build_caption_map(
                 json_text,
                 image_info,
                 captioner,
                 caption_state,
-                config.docling.on_vlm_error == "skip_document",
+                True,
             )
             figure_prefix = _figure_prefix(item, config)
             md_text, image_index = rewrite_markdown_images_with_placeholders(
@@ -690,7 +693,6 @@ def _extract_images(
     entries: list[zipfile.ZipInfo],
     doc_root: Path,
     config: AppConfig,
-    image_cache: dict[str, ImageInfo],
 ) -> tuple[dict[str, str], dict[str, ImageInfo]]:
     link_map: dict[str, str] = {}
     image_info: dict[str, ImageInfo] = {}
@@ -714,7 +716,6 @@ def _extract_images(
             rel_in_zip,
             doc_root,
             config,
-            image_cache,
         )
         link_map[rel_in_zip] = info_obj.public_url
         image_info[rel_in_zip] = info_obj
@@ -1004,29 +1005,7 @@ def _store_image(
     rel_in_zip: str,
     doc_root: Path,
     config: AppConfig,
-    image_cache: dict[str, ImageInfo],
 ) -> ImageInfo:
-    if config.output.image_dedupe:
-        image_hash = _hash_bytes(image_bytes, config.manifest.hash_algo)
-        cached = image_cache.get(image_hash)
-        if cached:
-            return cached
-        dest_path = config.output.image_dedupe_dir / f"{image_hash}{ext}"
-        if not dest_path.exists():
-            ensure_dir(dest_path.parent)
-            dest_path.write_bytes(image_bytes)
-        rel_path = _rel_path(dest_path, config.output.root_dir)
-        public_url = build_public_url(
-            config.output.public_base_url,
-            config.output.public_path_prefix,
-            rel_path,
-        )
-        info = ImageInfo(
-            image_hash=image_hash, local_path=dest_path, public_url=public_url, ext=ext
-        )
-        image_cache[image_hash] = info
-        return info
-
     out_rel_path = normalize_rel_path(str(doc_root / rel_in_zip))
     out_path = config.output.images_dir / Path(out_rel_path)
     ensure_dir(out_path.parent)
@@ -1118,18 +1097,20 @@ def _save_caption_cache(
     save_state(path, state)
 
 
-def _apply_stage2_dedupe(items: list[dict[str, Any]]) -> None:
+def _apply_stage2_dedupe(items: list[dict[str, Any]], config: AppConfig) -> None:
+    dedupe_key = _dedupe_field(config, "stage2", "md_sha256")
+    canonical_strategy = _canonical_strategy(config)
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in items:
         if item.get("conversion_status") != "success":
             continue
-        md_sha = item.get("md_sha256")
-        if md_sha:
-            groups.setdefault(md_sha, []).append(item)
+        value = item.get(dedupe_key)
+        if value:
+            groups.setdefault(str(value), []).append(item)
 
     for group in groups.values():
         paths = [item["source_rel_path"] for item in group]
-        canonical = choose_canonical(paths)
+        canonical = _choose_canonical(paths, canonical_strategy)
         for item in group:
             item["canonical"] = item["source_rel_path"] == canonical
             item["canonical_rel_path"] = canonical
@@ -1163,6 +1144,30 @@ def _build_file_source(prefix: str, rel_path: str) -> str:
     if prefix:
         return f"{prefix}/{rel_path}"
     return rel_path
+
+
+def _dedupe_field(config: AppConfig, key: str, default: str) -> str:
+    dedupe = config.manifest.dedupe
+    if isinstance(dedupe, dict):
+        value = dedupe.get(key)
+        if value:
+            return str(value)
+    return default
+
+
+def _canonical_strategy(config: AppConfig) -> str:
+    dedupe = config.manifest.dedupe
+    if isinstance(dedupe, dict):
+        value = dedupe.get("canonical_strategy")
+        if value:
+            return str(value)
+    return "shortest_path"
+
+
+def _choose_canonical(paths: list[str], strategy: str) -> str:
+    if strategy == "shortest_path":
+        return choose_canonical(paths)
+    return choose_canonical(paths)
 
 
 def _public_url_for_path(path: Path, config: AppConfig) -> str:
