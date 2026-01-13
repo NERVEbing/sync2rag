@@ -435,12 +435,14 @@ def _handle_passthrough(
     ensure_dir(dest_path.parent)
 
     md_text = read_text(source_path)
+    image_index: list[dict[str, Any]] = []
     if config.output.rewrite_passthrough_md:
         md_text, image_index = rewrite_markdown_images(md_text, {})
         if config.manifest.include_image_index:
             item["image_index"] = image_index
         else:
             item["image_index"] = []
+            image_index = []
     else:
         item["image_index"] = []
 

@@ -10,7 +10,13 @@ def test_image_ref_replaced_and_figures_appended() -> None:
         "![Alt text](https://example.com/image.png)\n"
         "Caption: Example caption.\n"
     )
-    image_index = [{"figure_id": "FIG-abc123", "caption": "Example caption."}]
+    image_index = [
+        {
+            "figure_id": "FIG-abc123",
+            "caption": "Example caption.",
+            "image_public_url": "http://images.example.com/fig1.png",
+        }
+    ]
     normalized = normalize_markdown(raw, image_index)
 
     assert "ImageRef" not in normalized
@@ -18,6 +24,7 @@ def test_image_ref_replaced_and_figures_appended() -> None:
     assert "(See figure: Example caption.)" in normalized
     assert "## Figures" in normalized
     assert "Figure 1: Example caption." in normalized
+    assert "Reference: http://images.example.com/fig1.png" in normalized
 
 
 def test_image_ref_without_caption_is_removed() -> None:

@@ -26,28 +26,37 @@ _SENTENCE_END_RE = re.compile(r"[.!?]$")
 def normalize_markdown(
     md_text: str, image_index: list[dict[str, Any]] | None = None
 ) -> str:
-    figures = _build_figure_map(image_index or [])
-    md_text, used_figures = _normalize_images(md_text, figures)
+    fig_caption_map, caption_url_map = _build_figure_maps(image_index or [])
+    md_text, used_figures = _normalize_images(md_text, fig_caption_map)
     md_text = _normalize_noise_lines(md_text)
     md_text = _normalize_tables(md_text)
     md_text = _normalize_paragraphs(md_text)
-    md_text = _append_figures(md_text, used_figures)
+    md_text = _append_figures(md_text, used_figures, caption_url_map)
     md_text = _final_cleanup(md_text)
     return md_text
 
 
-def _build_figure_map(image_index: list[dict[str, Any]]) -> dict[str, str]:
-    figures: dict[str, str] = {}
+def _build_figure_maps(
+    image_index: list[dict[str, Any]]
+) -> tuple[dict[str, str], dict[str, str]]:
+    fig_caption: dict[str, str] = {}
+    caption_url: dict[str, str] = {}
     for entry in image_index:
         fig_id = str(entry.get("figure_id") or "").strip()
         caption = str(entry.get("caption") or "").strip()
         if not fig_id or not caption or len(caption) < 3:
             continue
-        figures[fig_id] = caption
-    return figures
+        fig_caption[fig_id] = caption
+        if caption not in caption_url:
+            url = str(entry.get("image_public_url") or "").strip()
+            if url:
+                caption_url[caption] = url
+    return fig_caption, caption_url
 
 
-def _normalize_images(md_text: str, figure_map: dict[str, str]) -> tuple[str, list[str]]:
+def _normalize_images(
+    md_text: str, figure_map: dict[str, str]
+) -> tuple[str, list[str]]:
     used_figures: list[str] = []
     seen: set[str] = set()
 
@@ -268,13 +277,24 @@ def _normalize_paragraphs(md_text: str) -> str:
     return "\n".join(out_lines)
 
 
-def _append_figures(md_text: str, figures: list[str]) -> str:
+def _append_figures(
+    md_text: str, figures: list[str], caption_url: dict[str, str]
+) -> str:
     cleaned = [cap.strip() for cap in figures if cap and len(cap.strip()) >= 3]
     if not cleaned:
         return md_text
     lines = [md_text.rstrip(), "", "## Figures"]
-    for idx, caption in enumerate(cleaned, start=1):
+    seen: set[str] = set()
+    idx = 1
+    for caption in cleaned:
+        if caption in seen:
+            continue
+        seen.add(caption)
         lines.append(f"Figure {idx}: {caption}")
+        url = caption_url.get(caption)
+        if url:
+            lines.append(f"Reference: {url}")
+        idx += 1
     return "\n".join(lines).rstrip() + "\n"
 
 
