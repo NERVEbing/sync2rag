@@ -217,7 +217,7 @@ def _parse_docling(raw: dict[str, Any]) -> DoclingConfig:
         target_type=str(target_type),
         image_export_mode=str(options_raw.get("image_export_mode", "referenced")),
         include_images=bool(options_raw.get("include_images", True)),
-        images_scale=float(options_raw.get("images_scale", 2.0)),
+        images_scale=float(options_raw.get("images_scale", 1.0)),
         do_ocr=bool(options_raw.get("do_ocr", True)),
         force_ocr=bool(options_raw.get("force_ocr", False)),
         ocr_engine=str(options_raw.get("ocr_engine", "tesseract")),
