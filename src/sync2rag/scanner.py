@@ -17,6 +17,7 @@ from .config import AppConfig
 from .docling_client import DoclingClient, DoclingResult
 from .manifest import build_rag_manifest, now_iso, write_manifest
 from .markdown_utils import rewrite_markdown_images, rewrite_markdown_images_with_placeholders
+from .normalized_markdown import normalize_markdown
 from .state import load_state, save_state
 from .utils import (
     build_public_url,
@@ -443,6 +444,7 @@ def _handle_passthrough(
     else:
         item["image_index"] = []
 
+    md_text = normalize_markdown(md_text, image_index)
     write_text(dest_path, md_text)
 
     item["conversion_type"] = "passthrough"
@@ -501,6 +503,7 @@ def _handle_docling(
         item["conversion_error"] = "missing markdown content"
         return
 
+    md_text = normalize_markdown(md_text, image_index)
     rel_path = Path(item["source_rel_path"]).with_suffix(".md")
     md_path = config.output.markdown_dir / rel_path
     write_text(md_path, md_text)
