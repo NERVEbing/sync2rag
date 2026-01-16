@@ -12,6 +12,7 @@ class CaptioningConfig:
     url: str
     headers: dict[str, str]
     prompt: str
+    title_prompt: str | None
     model: str
     params: dict[str, Any]
     timeout_sec: float
@@ -30,10 +31,25 @@ class CaptionClient:
     def prompt(self) -> str:
         return self._config.prompt
 
+    @property
+    def title_prompt(self) -> str | None:
+        return self._config.title_prompt
+
     def close(self) -> None:
         self._client.close()
 
     def describe_bytes(self, image_bytes: bytes, mime: str) -> str | None:
+        """Generate detailed caption for the image."""
+        return self._call_vlm(image_bytes, mime, self._config.prompt)
+
+    def generate_title(self, image_bytes: bytes, mime: str) -> str | None:
+        """Generate short title for the image (if title_prompt is configured)."""
+        if not self._config.title_prompt:
+            return None
+        return self._call_vlm(image_bytes, mime, self._config.title_prompt)
+
+    def _call_vlm(self, image_bytes: bytes, mime: str, prompt: str) -> str | None:
+        """Internal method to call VLM API with given prompt."""
         b64 = base64.b64encode(image_bytes).decode()
         data_url = f"data:{mime};base64,{b64}"
         payload = {
@@ -43,7 +59,7 @@ class CaptionClient:
                     "role": "user",
                     "content": [
                         {"type": "image_url", "image_url": {"url": data_url}},
-                        {"type": "text", "text": self._config.prompt},
+                        {"type": "text", "text": prompt},
                     ],
                 }
             ],

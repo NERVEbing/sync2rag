@@ -65,12 +65,14 @@ def rewrite_markdown_images_with_placeholders(
     md_text: str,
     link_map: dict[str, str],
     caption_map: dict[str, str] | None = None,
+    title_map: dict[str, str] | None = None,
     include_caption_line: bool = True,
     figure_prefix: str = "FIG",
     section_title: str = "Images (auto-caption)",
 ) -> tuple[str, list[dict[str, Any]]]:
     normalized_map = {normalize_rel_path(k): v for k, v in link_map.items()}
     normalized_captions = {normalize_rel_path(k): v for k, v in (caption_map or {}).items()}
+    normalized_titles = {normalize_rel_path(k): v for k, v in (title_map or {}).items()}
     image_index: list[dict[str, Any]] = []
     figures: list[dict[str, Any]] = []
 
@@ -79,11 +81,13 @@ def rewrite_markdown_images_with_placeholders(
 
     def add_figure(alt: str, normalized: str, new_url: str) -> str:
         caption = normalized_captions.get(normalized)
+        title = normalized_titles.get(normalized)
         fig_id = next_figure_id()
         record = {
             "figure_id": fig_id,
             "image_public_url": new_url,
             "caption": caption or alt or fig_id,
+            "title": title,
             "raw_caption": caption,
             "alt": alt,
         }
@@ -92,6 +96,7 @@ def rewrite_markdown_images_with_placeholders(
             {
                 "image_public_url": new_url,
                 "caption": caption or alt or fig_id,
+                "title": title,
                 "figure_id": fig_id,
             }
         )

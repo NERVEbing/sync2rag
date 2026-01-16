@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 import re
-from typing import Any
+from typing import Any, Callable
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 
 _IMAGE_REF_RE = re.compile(r"\[ImageRef:\s*(?P<fig>FIG-[^\]\s]+)\s*\]")
 _IMAGE_REF_INLINE_RE = re.compile(r"ImageRef:\s*(?P<fig>FIG-[^\s]+)")
-_FIG_ID_RE = re.compile(r"\bFIG-[A-Za-z0-9-]+\b")
 _MD_IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)]+)\)")
 _HTML_IMAGE_RE = re.compile(
     r"<img\s+[^>]*src=[\"'](?P<url>[^\"']+)[\"'][^>]*>", re.IGNORECASE
@@ -21,43 +22,98 @@ _FREQ_UNIT_RE = re.compile(
 
 _SECTION_HEADING_RE = re.compile(r"^##\s*(images|figures)\b", re.IGNORECASE)
 _SENTENCE_END_RE = re.compile(r"[.!?]$")
+_SEE_FIGURE_RE = re.compile(r"\(See figure \[(?P<fig_id>[^\]]+)\]:\s*(?P<caption>[^)]+)\)")
+_STRAY_FIG_RE = re.compile(r"(?<!\[)FIG-[A-Za-z0-9-]+")
+
+IMAGE_CAPTION_PREFIX = "**Image:**"
 
 
 def normalize_markdown(
     md_text: str, image_index: list[dict[str, Any]] | None = None
 ) -> str:
-    fig_caption_map, caption_url_map = _build_figure_maps(image_index or [])
-    md_text, used_figures = _normalize_images(md_text, fig_caption_map)
+    fig_caption_map = _build_figure_map(image_index or [])
+    md_text = _normalize_images(md_text, fig_caption_map)
     md_text = _normalize_noise_lines(md_text)
     md_text = _normalize_tables(md_text)
     md_text = _normalize_paragraphs(md_text)
-    md_text = _append_figures(md_text, used_figures, caption_url_map)
+    md_text = inject_images_inline(md_text, image_index or [])
     md_text = _final_cleanup(md_text)
     return md_text
 
 
-def _build_figure_maps(
-    image_index: list[dict[str, Any]]
-) -> tuple[dict[str, str], dict[str, str]]:
-    fig_caption: dict[str, str] = {}
-    caption_url: dict[str, str] = {}
+def inject_images_inline(
+    md_text: str, image_index: list[dict[str, Any]]
+) -> str:
+    """Replace (See figure [FIG-xxx]: ...) placeholders with inline images."""
+    logger = logging.getLogger(__name__)
+    fig_to_image: dict[str, tuple[str, str, str]] = {}
+
     for entry in image_index:
         fig_id = str(entry.get("figure_id") or "").strip()
         caption = str(entry.get("caption") or "").strip()
-        if not fig_id or not caption or len(caption) < 3:
-            continue
-        fig_caption[fig_id] = caption
-        if caption not in caption_url:
-            url = str(entry.get("image_public_url") or "").strip()
-            if url:
-                caption_url[caption] = url
-    return fig_caption, caption_url
+        url = _encode_image_url(str(entry.get("image_public_url") or ""))
+        title = str(entry.get("title") or "").strip()
+        if fig_id and caption and url:
+            fig_to_image[fig_id] = (url, title, caption)
+
+    lines = md_text.splitlines()
+    out_lines: list[str] = []
+    matched_count = 0
+
+    for line in lines:
+        matches = list(_SEE_FIGURE_RE.finditer(line))
+        if matches:
+            for match in matches:
+                fig_id = match.group("fig_id").strip()
+                placeholder_caption = match.group("caption").strip()
+                image_data = fig_to_image.get(fig_id)
+                if image_data:
+                    url, title, caption = image_data
+                    alt_text = title if title else caption[:20]
+                    out_lines.append(f"![{alt_text}]({url})")
+                    out_lines.append("")
+                    out_lines.append(f"{IMAGE_CAPTION_PREFIX} {caption}")
+                    matched_count += 1
+                else:
+                    logger.warning(
+                        "No matching figure_id '%s' (caption: '%s')",
+                        fig_id,
+                        placeholder_caption[:50],
+                    )
+        else:
+            out_lines.append(line)
+
+    if matched_count < len(fig_to_image):
+        logger.warning(
+            "Image injection: %d/%d images matched to placeholders",
+            matched_count,
+            len(fig_to_image),
+        )
+
+    return "\n".join(out_lines)
 
 
-def _normalize_images(
-    md_text: str, figure_map: dict[str, str]
-) -> tuple[str, list[str]]:
-    used_figures: list[str] = []
+def _encode_image_url(url: str) -> str:
+    """Encode URL path segments, avoiding double-encoding."""
+    if not url:
+        return url
+    parsed = urlparse(url)
+    decoded_path = unquote(parsed.path)
+    encoded_path = quote(decoded_path, safe="/")
+    return urlunparse(parsed._replace(path=encoded_path))
+
+
+def _build_figure_map(image_index: list[dict[str, Any]]) -> dict[str, str]:
+    fig_caption: dict[str, str] = {}
+    for entry in image_index:
+        fig_id = str(entry.get("figure_id") or "").strip()
+        caption = str(entry.get("caption") or "").strip()
+        if fig_id and caption and len(caption) >= 3:
+            fig_caption[fig_id] = caption
+    return fig_caption
+
+
+def _normalize_images(md_text: str, figure_map: dict[str, str]) -> str:
     seen: set[str] = set()
 
     def replace_ref(match: re.Match[str]) -> str:
@@ -65,43 +121,30 @@ def _normalize_images(
         caption = figure_map.get(fig_id, "").strip()
         if not caption:
             return ""
-        if fig_id not in seen:
-            used_figures.append(caption)
-            seen.add(fig_id)
-        return f"(See figure: {caption})"
+        seen.add(fig_id)
+        return f"(See figure [{fig_id}]: {caption})"
 
     def replace_inline_ref(match: re.Match[str]) -> str:
         fig_id = match.group("fig")
         caption = figure_map.get(fig_id, "").strip()
         if not caption:
             return ""
-        if fig_id not in seen:
-            used_figures.append(caption)
-            seen.add(fig_id)
-        return f"(See figure: {caption})"
+        seen.add(fig_id)
+        return f"(See figure [{fig_id}]: {caption})"
 
     def replace_md_image(match: re.Match[str]) -> str:
-        alt = match.group("alt").strip()
-        if not alt or len(alt) < 3:
-            return ""
-        used_figures.append(alt)
-        return f"(See figure: {alt})"
+        return ""
 
     def replace_html_image(match: re.Match[str]) -> str:
-        raw = match.group(0)
-        alt = _extract_html_alt(raw).strip()
-        if not alt or len(alt) < 3:
-            return ""
-        used_figures.append(alt)
-        return f"(See figure: {alt})"
+        return ""
 
     md_text = _strip_auto_image_sections(md_text)
     md_text = _replace_outside_code(md_text, _IMAGE_REF_RE, replace_ref)
     md_text = _replace_outside_code(md_text, _IMAGE_REF_INLINE_RE, replace_inline_ref)
     md_text = _replace_outside_code(md_text, _MD_IMAGE_RE, replace_md_image)
     md_text = _replace_outside_code(md_text, _HTML_IMAGE_RE, replace_html_image)
-    md_text = _FIG_ID_RE.sub("", md_text)
-    return md_text, used_figures
+    md_text = _STRAY_FIG_RE.sub("", md_text)
+    return md_text
 
 
 def _strip_auto_image_sections(md_text: str) -> str:
@@ -138,18 +181,13 @@ def _strip_auto_image_sections(md_text: str) -> str:
 
 def _section_has_image_markers(lines: list[str]) -> bool:
     for line in lines:
-        if (
-            "![" in line
-            or "Caption:" in line
-            or "FIG-" in line
-            or "[ImageRef:" in line
-        ):
+        if "![" in line or "Caption:" in line or "FIG-" in line or "[ImageRef:" in line:
             return True
     return False
 
 
 def _replace_outside_code(
-    md_text: str, pattern: re.Pattern[str], replacer: Any
+    md_text: str, pattern: re.Pattern[str], replacer: Callable[[re.Match[str]], str]
 ) -> str:
     lines = md_text.splitlines()
     out: list[str] = []
@@ -220,9 +258,7 @@ def _normalize_tables(md_text: str) -> str:
 
 
 def _normalize_paragraphs(md_text: str) -> str:
-    lines = md_text.splitlines()
-    lines = _remove_repeated_lines(lines)
-
+    lines = _remove_repeated_lines(md_text.splitlines())
     out_lines: list[str] = []
     paragraph: str | None = None
     in_code = False
@@ -277,27 +313,6 @@ def _normalize_paragraphs(md_text: str) -> str:
     return "\n".join(out_lines)
 
 
-def _append_figures(
-    md_text: str, figures: list[str], caption_url: dict[str, str]
-) -> str:
-    cleaned = [cap.strip() for cap in figures if cap and len(cap.strip()) >= 3]
-    if not cleaned:
-        return md_text
-    lines = [md_text.rstrip(), "", "## Figures"]
-    seen: set[str] = set()
-    idx = 1
-    for caption in cleaned:
-        if caption in seen:
-            continue
-        seen.add(caption)
-        lines.append(f"Figure {idx}: {caption}")
-        url = caption_url.get(caption)
-        if url:
-            lines.append(f"Reference: {url}")
-        idx += 1
-    return "\n".join(lines).rstrip() + "\n"
-
-
 def _final_cleanup(md_text: str) -> str:
     lines = [line.rstrip() for line in md_text.splitlines()]
     cleaned: list[str] = []
@@ -316,9 +331,7 @@ def _final_cleanup(md_text: str) -> str:
 
 def _extract_html_alt(tag: str) -> str:
     match = _HTML_ALT_RE.search(tag)
-    if match:
-        return match.group(1)
-    return ""
+    return match.group(1) if match else ""
 
 
 def _is_noise_line(line: str) -> bool:
@@ -327,13 +340,9 @@ def _is_noise_line(line: str) -> bool:
         return False
     if _FREQ_UNIT_RE.match(stripped):
         return True
-    if stripped == "BW" or stripped == "PE":
+    if stripped in ("BW", "PE"):
         return True
-    if (
-        len(stripped) <= 12
-        and _NOISE_TOKEN_RE.match(stripped)
-        and any(ch.isdigit() for ch in stripped)
-    ):
+    if len(stripped) <= 12 and _NOISE_TOKEN_RE.match(stripped) and any(ch.isdigit() for ch in stripped):
         return True
     if len(stripped) <= 3 and stripped.isupper():
         return True
@@ -348,11 +357,7 @@ def _looks_like_table_row(line: str) -> bool:
     stripped = line.strip()
     if "|" not in stripped:
         return False
-    if stripped.startswith("|") or stripped.endswith("|"):
-        return True
-    if stripped.count("|") >= 2:
-        return True
-    return False
+    return stripped.startswith("|") or stripped.endswith("|") or stripped.count("|") >= 2
 
 
 def _has_table_leadin(out_lines: list[str]) -> bool:
@@ -365,47 +370,36 @@ def _has_table_leadin(out_lines: list[str]) -> bool:
 
 def _is_sentence_line(line: str) -> bool:
     stripped = line.strip()
-    if stripped.startswith("#") or stripped.startswith("-") or stripped.startswith("*"):
+    if stripped.startswith(("#", "-", "*")):
         return False
     if _looks_like_table_row(stripped):
         return False
-    if stripped.endswith((".", "!", "?", ":")):
-        return True
-    return False
+    return stripped.endswith((".", "!", "?", ":"))
 
 
 def _remove_repeated_lines(lines: list[str]) -> list[str]:
     normalized = [_normalize_line(line) for line in lines]
     counts: dict[str, int] = {}
     for line, norm in zip(lines, normalized):
-        if not _line_is_repeat_candidate(line):
-            continue
-        counts[norm] = counts.get(norm, 0) + 1
+        if _line_is_repeat_candidate(line):
+            counts[norm] = counts.get(norm, 0) + 1
 
-    remove_set = {line for line, count in counts.items() if count >= 3}
-    cleaned: list[str] = []
-    for line, norm in zip(lines, normalized):
-        if norm in remove_set and _line_is_repeat_candidate(line):
-            continue
-        cleaned.append(line)
-    return cleaned
+    remove_set = {n for n, count in counts.items() if count >= 3}
+    return [line for line, norm in zip(lines, normalized)
+            if not (norm in remove_set and _line_is_repeat_candidate(line))]
 
 
 def _line_is_repeat_candidate(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
-    if stripped.startswith("#") or stripped.startswith("-") or stripped.startswith("*"):
+    if stripped.startswith(("#", "-", "*", "```")):
         return False
     if _looks_like_table_row(stripped) or _looks_like_table_separator(stripped):
         return False
-    if stripped.startswith("```"):
-        return False
     if len(stripped) > 80:
         return False
-    if _SENTENCE_END_RE.search(stripped):
-        return False
-    return True
+    return not _SENTENCE_END_RE.search(stripped)
 
 
 def _normalize_line(line: str) -> str:
@@ -414,24 +408,14 @@ def _normalize_line(line: str) -> str:
 
 def _is_block_line(line: str) -> bool:
     stripped = line.lstrip()
-    if stripped.startswith("#"):
-        return True
-    if stripped.startswith(("- ", "* ", "+ ")):
+    if stripped.startswith(("#", ">")) or stripped.startswith(("- ", "* ", "+ ")):
         return True
     if re.match(r"^\d+\.\s+", stripped):
         return True
-    if _looks_like_table_row(stripped) or _looks_like_table_separator(stripped):
-        return True
-    if stripped.startswith(">"):
-        return True
-    return False
+    return _looks_like_table_row(stripped) or _looks_like_table_separator(stripped)
 
 
 def _should_merge_paragraph(current: str, incoming: str) -> bool:
     if not _SENTENCE_END_RE.search(current.strip()):
         return True
-    if len(current.strip()) < 80:
-        return True
-    if len(incoming.strip()) < 40:
-        return True
-    return False
+    return len(current.strip()) < 80 or len(incoming.strip()) < 40

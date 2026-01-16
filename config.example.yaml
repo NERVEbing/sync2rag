@@ -69,8 +69,35 @@ captioning:
     max_completion_tokens: 200
   # Optional (default: 30). Per-request timeout in seconds.
   timeout: 20
-  # Optional (default: "Describe this image in a few sentences."). Prompt used for captions.
-  prompt: "Describe the image in 1-2 concise sentences. Do not add any polite preface or conversational filler. Avoid acknowledgements like OK/Sure. No lists or Markdown. Only output the description."
+  # Required. Prompt for generating detailed image descriptions.
+  prompt: |
+    Describe what you see in this image using 1-2 concise sentences.
+    Focus on factual, objective details.
+
+    Rules:
+    - Start directly with the description
+    - No greetings, acknowledgements, or conversational phrases
+    - No lists or bullet points
+    - No markdown formatting
+
+    Example good outputs:
+    - "A rear panel schematic showing terminal connectors labeled A, B, C with RJ45 ethernet ports M, N, P below."
+    - "A red company logo featuring a golden silhouette holding a torch with 'US' text."
+
+    Now describe this image:
+  # Optional. Prompt for generating short image titles (3-8 words).
+  # If configured, each image will call VLM twice (caption + title).
+  # If omitted, titles will be auto-generated from captions using fallback logic.
+  title_prompt: |
+    Generate a concise title for this image (3-8 words).
+    Output only the title itself, nothing else.
+
+    Examples:
+    - "Device Rear Panel"
+    - "Company Logo"
+    - "System Configuration Diagram"
+
+    Title:
 
 output:
   # Optional (default: data). Root output directory for generated files (must not contain input.root_dir).

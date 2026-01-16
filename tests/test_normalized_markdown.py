@@ -1,7 +1,7 @@
-from sync2rag.normalized_markdown import normalize_markdown
+from sync2rag.normalized_markdown import IMAGE_CAPTION_PREFIX, normalize_markdown
 
 
-def test_image_ref_replaced_and_figures_appended() -> None:
+def test_image_ref_replaced_and_inline_image_injected() -> None:
     raw = (
         "Intro line.\n"
         "[ImageRef: FIG-abc123]\n\n"
@@ -21,10 +21,10 @@ def test_image_ref_replaced_and_figures_appended() -> None:
 
     assert "ImageRef" not in normalized
     assert "FIG-abc123" not in normalized
-    assert "(See figure: Example caption.)" in normalized
-    assert "## Figures" in normalized
-    assert "Figure 1: Example caption." in normalized
-    assert "Reference: http://images.example.com/fig1.png" in normalized
+    assert "![Example caption.](http://images.example.com/fig1.png)" in normalized
+    assert f"{IMAGE_CAPTION_PREFIX} Example caption." in normalized
+    assert "## Figures" not in normalized
+    assert "Figure 1:" not in normalized
 
 
 def test_image_ref_without_caption_is_removed() -> None:

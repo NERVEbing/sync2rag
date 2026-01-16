@@ -5,6 +5,7 @@ import fnmatch
 import json
 import logging
 import os
+import re
 import time
 import zipfile
 from dataclasses import dataclass
@@ -666,7 +667,7 @@ def _extract_from_zip(
 
         image_links, image_info = _extract_images(zf, entries, doc_root, config)
         if md_text and config.output.rewrite_docling_image_links:
-            caption_map, caption_stats = _build_caption_map(
+            caption_map, title_map, caption_stats = _build_caption_map(
                 json_text,
                 image_info,
                 captioner,
@@ -678,6 +679,7 @@ def _extract_from_zip(
                 md_text,
                 image_links,
                 caption_map,
+                title_map,
                 include_caption_line=True,
                 figure_prefix=figure_prefix,
             )
@@ -746,8 +748,14 @@ def _build_caption_map(
     captioner: CaptionClient | None,
     caption_state: dict[str, Any],
     skip_on_error: bool,
-) -> tuple[dict[str, str], dict[str, int]]:
+) -> tuple[dict[str, str], dict[str, str], dict[str, int]]:
+    """Build caption and title maps for images.
+
+    Returns:
+        (caption_map, title_map, stats)
+    """
     caption_map: dict[str, str] = {}
+    title_map: dict[str, str] = {}
     text_lookup: dict[str, str] = {}
     stats = {"docling": 0, "cache": 0, "vlm": 0}
 
@@ -797,23 +805,39 @@ def _build_caption_map(
     for image_hash, rel_paths in images_by_hash.items():
         existing = _find_existing_caption(caption_map, rel_paths)
         if existing:
-            _apply_caption_aliases(caption_map, rel_paths, existing)
+            # For existing captions from docling, generate fallback title
+            existing_title = _fallback_title(existing)
+            _apply_caption_aliases(caption_map, title_map, rel_paths, existing, existing_title)
             continue
 
         cached = cache_items.get(image_hash)
         cached_caption = cached.get("caption") if isinstance(cached, dict) else None
+        cached_title = cached.get("title") if isinstance(cached, dict) else None
+
         if cached_caption:
             normalized = _normalize_caption_text(str(cached_caption))
             if not _is_bad_caption(normalized):
                 stats["cache"] += 1
-                _apply_caption_aliases(caption_map, rel_paths, normalized)
+                # Use cached title if available, otherwise fallback
+                title = cached_title if cached_title else _fallback_title(normalized)
+                _apply_caption_aliases(caption_map, title_map, rel_paths, normalized, title)
                 continue
 
         info = image_info[rel_paths[0]]
         try:
             image_bytes = info.local_path.read_bytes()
-            caption = captioner.describe_bytes(image_bytes, _mime_for_ext(info.ext))
+            mime = _mime_for_ext(info.ext)
+
+            # Generate detailed caption
+            caption = captioner.describe_bytes(image_bytes, mime)
             stats["vlm"] += 1
+
+            # Generate short title (if title_prompt is configured)
+            title = captioner.generate_title(image_bytes, mime)
+            if title:
+                stats["vlm"] += 1
+                title = _normalize_caption_text(title)
+
         except Exception as exc:
             if skip_on_error:
                 raise CaptioningError(str(exc))
@@ -831,14 +855,19 @@ def _build_caption_map(
                 raise CaptioningError("bad caption")
             continue
 
+        # Use title if available, otherwise fallback
+        if not title or _is_bad_caption(title):
+            title = _fallback_title(caption)
+
         cache_items[image_hash] = {
             "caption": caption,
+            "title": title,
             "model": captioner.model,
             "prompt": captioner.prompt,
         }
-        _apply_caption_aliases(caption_map, rel_paths, caption)
+        _apply_caption_aliases(caption_map, title_map, rel_paths, caption, title)
 
-    return caption_map, stats
+    return caption_map, title_map, stats
 
 
 def _caption_from_annotations(annotations: list[dict[str, Any]]) -> str | None:
@@ -868,53 +897,34 @@ def _caption_from_refs(refs: list[Any], text_lookup: dict[str, str]) -> str | No
     return None
 
 
-_LEADING_FILLERS_LOWER = (
-    "ok",
-    "okay",
-    "sure",
-    "certainly",
-    "of course",
-    "here is",
-    "here's",
-    "below is",
-    "the following is",
-)
-
-_LEADING_FILLERS = (
-    "好的",
-    "好的呢",
-    "当然",
-    "当然可以",
-    "可以",
-    "没问题",
-    "没有问题",
-    "以下是",
-    "下面是",
-)
-
 _LEADING_STRIP_CHARS = " \t\r\n-–—:：,，。"
+
+# Language-agnostic filler patterns (instead of hardcoded word lists)
+_FILLER_PATTERNS = [
+    # Match single words followed by comma/colon (e.g., "OK," "Sure," "好的，")
+    r'^[A-Za-z\u4e00-\u9fff]{1,10}[,，]\s*',
+    # Match "Here is/are" "Below is/are" "The following is/are"
+    r'^(here|below|the\s+following)\s+(is|are)\s*[:：]?\s*',
+    # Match Chinese courtesy phrases
+    r'^(好的|当然|可以|没问题|以下是|下面是)[，,：:]?\s*',
+]
 
 
 def _strip_leading_fillers(text: str) -> str:
+    """Strip conversational fillers using regex patterns (language-agnostic)."""
     cleaned = text.strip()
-    for _ in range(4):
-        lowered = cleaned.lower()
-        matched = False
-        for filler in _LEADING_FILLERS_LOWER:
-            if lowered.startswith(filler):
-                cleaned = cleaned[len(filler):].lstrip(_LEADING_STRIP_CHARS)
-                matched = True
-                break
-        if matched:
-            continue
-        for filler in _LEADING_FILLERS:
-            if cleaned.startswith(filler):
-                cleaned = cleaned[len(filler):].lstrip(_LEADING_STRIP_CHARS)
-                matched = True
-                break
-        if not matched:
+
+    for _ in range(3):  # Max 3 iterations
+        original = cleaned
+        for pattern in _FILLER_PATTERNS:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+            cleaned = cleaned.lstrip(_LEADING_STRIP_CHARS)
+
+        # If no change, we're done
+        if cleaned == original:
             break
-    return cleaned
+
+    return cleaned.strip()
 
 
 def _normalize_caption_text(text: str) -> str:
@@ -923,43 +933,67 @@ def _normalize_caption_text(text: str) -> str:
     return cleaned.strip(_LEADING_STRIP_CHARS)
 
 
+def _fallback_title(caption: str) -> str:
+    """Generate fallback title from caption (language-agnostic)."""
+    if not caption:
+        return "Image"
+
+    caption = caption.strip()
+
+    # Strategy 1: If already short, use as-is
+    if len(caption) <= 15:
+        return caption
+
+    # Strategy 2: Cut at first sentence-ending punctuation
+    for sep in ['. ', '。', '! ', '！', '? ', '？']:
+        if sep in caption:
+            first_sentence = caption.split(sep)[0]
+            if 3 <= len(first_sentence) <= 30:
+                return first_sentence
+
+    # Strategy 3: Cut at first comma
+    for sep in [', ', '，', '; ', '；']:
+        if sep in caption:
+            first_part = caption.split(sep)[0]
+            if 3 <= len(first_part) <= 30:
+                return first_part
+
+    # Strategy 4: Take first 20 characters
+    return caption[:20]
+
+
 def _is_bad_caption(text: str) -> bool:
-    lowered = text.lower()
-    normalized = lowered.strip(_LEADING_STRIP_CHARS)
-    if not normalized or normalized in {
-        "image",
-        "figure",
-        "picture",
-        "图片",
-        "图像",
-        "照片",
-    }:
+    """Check if caption is invalid or error response (language-agnostic)."""
+    if not text or len(text.strip()) < 3:
         return True
-    bad_markers = [
-        "please provide the image",
-        "i'm sorry",
-        "i am sorry",
-        "i cannot",
-        "i can't",
-        "as an ai",
-        "unable to",
-        "no image",
-        "cannot see the image",
-        "抱歉",
-        "对不起",
-        "作为ai",
-        "作为人工智能",
-        "无法识别",
-        "无法判断",
-        "无法看到图片",
-        "无法查看图片",
-        "无法访问图片",
-        "无法打开图片",
-        "图片不存在",
-        "请提供图片",
-        "请上传图片",
+
+    lowered = text.lower().strip(_LEADING_STRIP_CHARS)
+
+    # Generic invalid captions (any language)
+    generic_bad = {
+        "image", "figure", "picture", "photo",  # English
+        "图片", "图像", "照片",  # Chinese
+        "imagen", "foto",  # Spanish
+        "bild",  # German
+    }
+
+    if lowered in generic_bad:
+        return True
+
+    # Error response patterns (VLM refusal or failure)
+    error_patterns = [
+        r'(sorry|apolog|cannot|unable|can\'t)',  # English errors
+        r'(抱歉|对不起|无法|不能)',  # Chinese errors
+        r'(no image|not available|not provided|cannot see)',  # Missing image
+        r'as an ai',  # AI self-reference
+        r'(lo siento|no puedo)',  # Spanish errors
     ]
-    return any(marker in lowered for marker in bad_markers)
+
+    for pattern in error_patterns:
+        if re.search(pattern, lowered):
+            return True
+
+    return False
 
 
 def _find_existing_caption(
@@ -975,11 +1009,20 @@ def _find_existing_caption(
 
 
 def _apply_caption_aliases(
-    caption_map: dict[str, str], rel_paths: list[str], caption: str
+    caption_map: dict[str, str],
+    title_map: dict[str, str],
+    rel_paths: list[str],
+    caption: str,
+    title: str | None = None,
 ) -> None:
+    """Apply caption and title to all path aliases."""
     for rel in rel_paths:
-        caption_map.setdefault(normalize_rel_path(rel), caption)
+        normalized = normalize_rel_path(rel)
+        caption_map.setdefault(normalized, caption)
         caption_map.setdefault(rel, caption)
+        if title:
+            title_map.setdefault(normalized, title)
+            title_map.setdefault(rel, title)
 
 
 def _mime_for_ext(ext: str) -> str:
@@ -1056,6 +1099,10 @@ def _init_captioner(config: AppConfig) -> CaptionClient | None:
         )
         return None
     prompt = str(api.get("prompt") or "Describe this image in a few sentences.")
+    title_prompt = api.get("title_prompt")
+    if title_prompt:
+        title_prompt = str(title_prompt).strip() or None
+
     timeout_raw = api.get("timeout") or api.get("timeout_sec") or 30
     try:
         timeout_sec = float(timeout_raw)
@@ -1066,6 +1113,7 @@ def _init_captioner(config: AppConfig) -> CaptionClient | None:
             url=str(url),
             headers=headers,
             prompt=prompt,
+            title_prompt=title_prompt,
             model=model,
             params=params,
             timeout_sec=timeout_sec,

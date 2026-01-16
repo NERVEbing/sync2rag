@@ -10,7 +10,7 @@ def test_normalize_caption_strips_leading_fillers() -> None:
 
 def test_bad_caption_rejects_chinese_refusals() -> None:
     assert _is_bad_caption("无法看到图片") is True
-    assert _is_bad_caption("请上传图片") is True
+    assert _is_bad_caption("抱歉无法处理") is True
 
 
 def test_bad_caption_rejects_trivial_chinese_words() -> None:
